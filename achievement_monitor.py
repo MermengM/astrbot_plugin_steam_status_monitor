@@ -8,9 +8,10 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import Set, Optional, Dict, Any
 
 class AchievementMonitor:
-    def __init__(self, data_dir: str, steam_api_base: str = "https://api.steampowered.com"):
+    def __init__(self, data_dir: str, steam_api_base: str = "https://api.steampowered.com", proxy: str = None):
         self.data_dir = data_dir
         self.steam_api_base = (steam_api_base or "https://api.steampowered.com").rstrip("/")
+        self.proxy = proxy
         self.initial_achievements = {}  # {(group_id, steamid, appid): set_of_achievement_names}
         os.makedirs(data_dir, exist_ok=True)
         self.achievements_file = os.path.join(data_dir, "achievements_cache.json")
@@ -65,7 +66,7 @@ class AchievementMonitor:
         # 黑名单机制
         if hasattr(self, 'achievement_blacklist') and str(appid) in self.achievement_blacklist:
             return None
-        url = f"{self.steam_api_base}/ISteamUserStats/GetPlayerAchievements/v1/"
+        url = "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/"
         lang_list = ["schinese", "english", "en"]
         all_failed = True
         for lang in lang_list:
@@ -77,7 +78,7 @@ class AchievementMonitor:
             }
             for attempt in range(3):
                 try:
-                    async with httpx.AsyncClient(timeout=15) as client:
+                    async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
                         response = await client.get(url, params=params)
                         if response.status_code == 200:
                             data = response.json()
@@ -121,12 +122,12 @@ class AchievementMonitor:
         if cache_key in self.details_cache:
             return self.details_cache[cache_key]
         lang_list = [lang, "schinese", "english", "en"]
-        url_stats = f"{self.steam_api_base}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid={appid}"
+        url_stats = f"https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid={appid}"
         details = {}
         for try_lang in lang_list:
-            url = f"{self.steam_api_base}/ISteamUserStats/GetSchemaForGame/v2/?appid={appid}&key={api_key}&l={try_lang}"
+            url = f"https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?appid={appid}&key={api_key}&l={try_lang}"
             try:
-                async with httpx.AsyncClient(timeout=15) as client:
+                async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
                     # 成就元数据
                     resp = await client.get(url)
                     if resp.status_code == 400:
@@ -142,7 +143,7 @@ class AchievementMonitor:
                                 "appid": appid,
                                 "l": lang2
                             }
-                            resp2 = await client.get(f"{self.steam_api_base}/ISteamUserStats/GetPlayerAchievements/v1/", params=params)
+                            resp2 = await client.get("https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/", params=params)
                             if resp2.status_code == 200:
                                 try:
                                     data = resp2.json()
@@ -485,7 +486,7 @@ class AchievementMonitor:
                 icon_img = None
                 if icon_url:
                     try:
-                        async with session.get(icon_url) as response:
+                        async with session.get(icon_url, proxy=self.proxy) as response:
                             if response.status == 200:
                                 icon_data = await response.read()
                                 icon_img = Image.open(io.BytesIO(icon_data)).convert("RGBA")

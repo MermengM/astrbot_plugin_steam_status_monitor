@@ -3,7 +3,7 @@ import io
 from typing import Optional
 from .steam_list_render import render_steam_list_image
 
-async def handle_steam_list(self, event, *, font_path: Optional[str] = None, **_kwargs):
+async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
     '''列出所有玩家当前状态（图片美化版，分群支持）'''
     # 获取分群ID
     group_id = None
@@ -102,7 +102,7 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, **_
                 'lastlogoff': lastlogoff
             })
     # 渲染图片
-    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path)
+    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy)
     if img_bytes:
         with io.BytesIO(img_bytes) as buf:
             import tempfile

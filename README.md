@@ -1,4 +1,4 @@
-# Steam 状态监控插件V2
+# Steam 状态监控插件V3
 
 ## 访问统计
 ![访问统计](https://count.getloli.com/get/@astrbot_ssm?theme=rule34)
@@ -9,10 +9,16 @@
 - 支持定时轮询多个 SteamID 的状态，分群管理，每个群聊可独立配置监控玩家
 - 检测玩家上线、下线、开始/切换/退出游戏等状态变更，自动推送游戏启动/关闭提醒
 - 成就变动自动推送提醒
-- 已配置自动轮询频率，默认为1-30分钟查询一次状态，取决于steam的上次在线时间，可以在后台修改
+- 智能轮询 + 固定轮询双模式可切换，默认为1-30分钟查询一次状态，取决于steam的上次在线时间
 - 持久化记录玩家游玩日志，重启bot后状态不会丢失
+- **批量查询优化**：采用 Steam 官方批量接口（单次最多 100 个 ID），大幅降低 API 调用次数，从根本上避免触发 Steam 限流（HTTP 429 / x-eresult: 84）
+- **多种 ID 输入格式**：`addid` 现支持 SteamID64、个人资料链接、自定义 vanity URL、`s.team` 短链、8 位好友码等多种格式
+- **通知开关精细化**：可独立控制游戏结束通知、成就推送、以及图片/文本推送方式
+- **网络代理支持**：可配置 http / https / socks5 代理，改善网络环境下的数据获取稳定性
+- **字体自动管理**：自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，渲染更稳定
+- **性能优化**：节流写盘、单点异常隔离、批量预拉取，避免拖慢 AstrBot 主进程与 WebUI
 
-## 默认轮询间隔说明
+## 默认轮询间隔说明（智能轮询模式）
 | 玩家最近在线时间      | 轮询间隔 |
 |----------------------|---------|
 | 游戏中               | 1分钟   |
@@ -25,20 +31,41 @@
 ## 快速上手
 1. 在AstrBot网页后台的配置中配置 Steam_Web_API_Key：[点击获取](https://steamcommunity.com/dev/apikey)
 2. 在AstrBot网页后台的配置中配置 SGDB_API_KEY（用于获取封面图，可选）：[点击获取](https://www.steamgriddb.com/profile/preferences/api)
-3. 在需要进行提醒的群聊输入指令：
-   `/steam addid [Steam64位ID]`  （如：/steam addid 7656119xxxxxxxxxx）
+3. 在需要进行提醒的群聊输入指令添加要监控的玩家（以下格式均支持）：
+   - `/steam addid 7656119xxxxxxxxx`（SteamID64）
+   - `/steam addid https://steamcommunity.com/profiles/7656119xxxxxxxxx`（个人资料链接）
+   - `/steam addid https://steamcommunity.com/id/customname`（自定义 vanity URL）
+   - `/steam addid https://s.team/p/7656119xxxxxxxxx`（s.team 短链）
+   - `/steam addid 123456789`（8 位好友码）
 4. 启动轮询：
    `/steam on`  启动本群 Steam 状态监控，后续状态变更会自动推送。
 
+## 配置项说明
+| 配置项 | 说明 | 默认值 |
+|-------|------|-------|
+| `steam_api_key` | Steam Web API Key | — |
+| `sgdb_api_key` | SteamGridDB API Key（用于封面图） | — |
+| `fixed_poll_interval` | 固定轮询间隔（秒），为 0 时使用智能轮询 | 0 |
+| `smart_poll_intervals` | 智能轮询各状态间隔（分钟，逗号分隔） | `1,3,5,10,20,30` |
+| `retry_times` | Steam API 请求重试次数 | 3 |
+| `max_group_size` | 单群最大监控人数 | 20 |
+| `detailed_poll_log` | 详细轮询日志开关 | true |
+| `enable_achievement_poll` | 成就轮询推送开关 | true |
+| `enable_game_end_notify` | 游戏结束通知开关 | true |
+| `notify_send_image` | 通知发送图片开关 | true |
+| `notify_send_text` | 通知发送文本开关 | true |
+| `enable_proxy` | 启用网络代理 | false |
+| `proxy_url` | 代理链接（如 `http://127.0.0.1:7890`） | 空 |
 
+> 带「修改后重启AstrBot生效」标注的配置项需重启后生效。
 
 ## 注意事项
-- 获取速度与是否成功获取 Steam 数据取决于网络环境。建议通过加速或魔法手段来保证稳定的查询状态。
+- 获取速度与是否成功获取 Steam 数据取决于网络环境。建议通过加速或代理（现已内置代理配置项）来保证稳定的查询状态。
+- 如果出现未知的轮询错误可以使用 `/steam clear_allids` 来清除所有群聊的轮询 id。
+- 修改插件参数后，如果出现重复通知的情况，请不要重载插件，而是重启 AstrBot。
+- 如果出现未知的无法提醒，但轮询显示正常的情况，请使用 `/steam on/off` 进行修复。
+- 监控人数较多时，建议适当调高 `max_group_size` 并保持智能轮询，以兼顾时效与 Steam 限流。
 
-- 如果出现未知的轮询错误可以使用 /steam clear_allids 来清除所有群聊的轮询id
-- 修改插件参数后，如果出现重复通知的情况，请不要重载插件，而是重启astrbot。
-- 如果出现未知的无法提醒，但轮询显示正常的情况，请使用 /steam on/off 进行修复
-- 部分设备会出现2.1.7或以上版本无法正常进行信息推送的情况，需降级为2.1.6或以下版本使用。
 ## 演示截图
 ![开始游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/str.png)
 ![结束游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/stop.png)
@@ -52,10 +79,10 @@
 - `/steam alllist` 列出所有群聊分组及玩家状态
 - `/steam config` 查看当前插件配置
 - `/steam set [参数] [值]` 设置配置参数（如 `/steam set poll_interval_sec 30`）
-- `/steam addid [SteamID]` 添加SteamID到本群监控列表
+- `/steam addid [SteamID/链接/好友码]` 添加玩家到本群监控列表（支持多种格式）
 - `/steam delid [SteamID]` 从本群监控列表删除SteamID
 - `/steam push_group [SteamID]` 添加id到联动推送的副群（轮询一次通知多个群聊）
-- `/steam delpush_group [SteamID]`删除id联动推送的副群
+- `/steam delpush_group [SteamID]` 删除id联动推送的副群
 - `/steam openbox [SteamID]` 查看指定SteamID的全部详细信息
 - `/steam rs` 清除所有状态并初始化
 - `/steam achievement_on` 开启本群Steam成就推送
@@ -82,6 +109,18 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.0.0（2026/07/03）重大更新
+  - **性能与稳定性大幅优化**：采用 Steam 官方批量查询接口（单次最多 100 个 ID），大幅降低 API 调用次数，从根本上避免触发 Steam 限流（HTTP 429 / x-eresult: 84）及 IP 被封禁；批量失败时自动降级为单查，保证可用性
+  - **轮询架构重构**：重写全局轮询循环，按动态到点查询 + 异常隔离（`return_exceptions=True`），修复在线玩家不再轮询、离线玩家轮询间隔越来越长的问题
+  - **WebUI 卡顿修复**：引入持久化数据脏标志 + 节流写盘（默认 300 秒一次），避免高频写盘拖慢 AstrBot 主进程与 WebUI
+  - **退出推送修复**：新增延迟退出检查与去重机制（`_pending_quit_tasks`），修复同一玩家同一游戏在短时间内重复触发退出通知的问题；优化推送会话管理，修复 `未设置推送会话，无法发送消息` 错误
+  - **多种 ID 输入格式**：`addid` 现支持 SteamID64、个人资料链接、自定义 vanity URL（自动调用 ResolveVanityURL 解析）、`s.team` 短链、8 位好友码
+  - **通知开关精细化**：新增 `enable_game_end_notify`（可单独关闭游戏结束通知）、`notify_send_image` / `notify_send_text`（图片/文本推送可独立控制）
+  - **配置项开放**：`max_group_size`（单群最大监控人数）由硬编码改为可配置项，方便大群 / 粉丝群使用
+  - **网络代理支持**：新增 `enable_proxy` / `proxy_url` 配置项，支持 http / https / socks5 代理（来自社区 PR）
+  - **字体自动管理**：启动时自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，缓存到数据目录，渲染更稳定
+  - **成就系统优化**：新增 `enable_achievement_poll` 开关，获取成就失败的游戏自动加入黑名单跳过轮询
+  - **游戏名中文化**：优先通过 Steam 商店 API 获取游戏中文名，无则回退英文名
 - V2.2.0
-添加了缺失的封面的图片显示
-添加了新功能，可以将已经轮询中账号，联动推送到多个副群（适用于多个粉丝群的情况）
+  添加了缺失的封面的图片显示
+  添加了新功能，可以将已经轮询中账号，联动推送到多个副群（适用于多个粉丝群的情况）

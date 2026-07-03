@@ -4,9 +4,8 @@ from astrbot.api.message_components import Plain, Image
 
 async def handle_openbox(self, event, steamid: str):
     '''查询并格式化展示指定SteamID的全部API返回信息（中文字段名，头像图片附加，位置ID合并，状态字段直观显示）'''
-    api_base = getattr(self, 'STEAM_API_BASE', 'https://api.steampowered.com').rstrip('/')
     url = (
-        f"{api_base}/ISteamUser/GetPlayerSummaries/v2/"
+        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
         f"?key={self.API_KEY}&steamids={steamid}"
     )
     field_map = {
@@ -49,7 +48,8 @@ async def handle_openbox(self, event, steamid: str):
         2: "所有人可评论"
     }
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        proxy = getattr(self, 'proxy', None)
+        async with httpx.AsyncClient(timeout=15, proxy=proxy) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
                 yield event.plain_result(f"API请求失败: HTTP {resp.status_code}")
