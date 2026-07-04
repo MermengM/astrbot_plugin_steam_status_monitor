@@ -4,7 +4,8 @@ import io
 import time
 import asyncio
 import httpx
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
+from .game_start_render import get_avatar_frame_url, get_avatar_frame_path, _cache_config
 
 # 更深的蓝紫色到黑色渐变
 BG_COLOR_TOP = (24, 18, 48)   # 顶部深蓝紫
@@ -112,9 +113,12 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
     cover_dir = os.path.join(data_dir, "covers_v")
     os.makedirs(cover_dir, exist_ok=True)
     path = os.path.join(cover_dir, f"{gameid}.jpg")
-    # 只在本地不存在时才云端获取
-    if os.path.exists(path):
+    cover_refresh = _cache_config.get("cover_vertical", 0)
+    if cover_refresh == 0 and os.path.exists(path):
         return path
+    elif cover_refresh > 0 and os.path.exists(path):
+        if time.time() - os.path.getmtime(path) < cover_refresh:
+            return path
     # 只尝试 SGDB 竖版封面
     url = await get_sgdb_vertical_cover(game_name, sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
     if url:
@@ -222,7 +226,7 @@ def text_wrap(text, font, max_width):
         lines.append(line)
     return lines
 
-def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None):
+def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None):
     # 字体
     fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
@@ -292,6 +296,14 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
             avatar_rgba = avatar.copy()
             avatar_rgba.putalpha(mask)
             img.alpha_composite(avatar_rgba, (avatar_x, avatar_y))
+            if avatar_frame_path and os.path.exists(avatar_frame_path):
+                try:
+                    frame_size = AVATAR_SIZE + 12
+                    frame_offset = (frame_size - AVATAR_SIZE) // 2
+                    frame_img = Image.open(avatar_frame_path).convert("RGBA").resize((frame_size, frame_size), Image.LANCZOS)
+                    img.alpha_composite(frame_img, (avatar_x - frame_offset, avatar_y - frame_offset))
+                except Exception as e:
+                    print(f"[game_end_render] 头像框渲染失败: {e}")
         except Exception as e:
             import traceback
             print(f"[game_end_render] 头像加载失败: {e}\n{traceback.format_exc()}")
@@ -375,7 +387,11 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
 async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, game_name, end_time_str, tip_text, duration_h, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None):
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
-    img = render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=font_path)
+    avatar_frame_path = get_avatar_frame_path(data_dir, steamid, proxy=proxy)
+    if not avatar_frame_path:
+        avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
+        avatar_frame_path = get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
+    img = render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=font_path, avatar_frame_path=avatar_frame_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

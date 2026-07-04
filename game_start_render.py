@@ -8,6 +8,8 @@ import random
 BG_COLOR_TOP = (49, 80, 66)
 BG_COLOR_BOTTOM = (28, 35, 44)
 AVATAR_SIZE = 80
+
+_cache_config = {"avatar":86400,"avatar_frame":604800,"cover_vertical":0}
 COVER_W, COVER_H = 80, 120
 IMG_W, IMG_H = 512, 192  # 16:6，画布高度减少三分之一
 
@@ -16,10 +18,12 @@ def get_avatar_path(data_dir, steamid, url, force_update=False, proxy=None):
     avatar_dir = os.path.join(data_dir, "avatars")
     os.makedirs(avatar_dir, exist_ok=True)
     path = os.path.join(avatar_dir, f"{steamid}.jpg")
-    refresh_interval = 24 * 3600
-    if os.path.exists(path) and not force_update:
+    refresh_interval = _cache_config.get("avatar", 86400)
+    if refresh_interval > 0 and os.path.exists(path) and not force_update:
         if time.time() - os.path.getmtime(path) < refresh_interval:
             return path
+    elif refresh_interval == 0 and os.path.exists(path):
+        return path
     try:
         resp = httpx.get(url, timeout=10, proxy=proxy)
         if resp.status_code == 200:
@@ -28,6 +32,83 @@ def get_avatar_path(data_dir, steamid, url, force_update=False, proxy=None):
             return path
     except Exception:
         pass
+    return path if os.path.exists(path) else None
+
+
+def set_cache_config(config_dict):
+    global _cache_config
+    _cache_config.update(config_dict)
+
+
+_frame_url_cache = {}  # {steamid: (url_or_None, timestamp)}
+
+async def get_avatar_frame_url(steamid, proxy=None):
+    import re, json, time
+    cache_ttl = _cache_config.get("avatar_frame", 604800)
+    if steamid in _frame_url_cache:
+        cached_url, cached_time = _frame_url_cache[steamid]
+        if cache_ttl == 0 or time.time() - cached_time < cache_ttl:
+            return cached_url
+    try:
+        url = f"https://steamcommunity.com/profiles/{steamid}/?l=english"
+        async with httpx.AsyncClient(timeout=10, proxy=proxy, follow_redirects=True) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                div_match = re.search(r'<div class="profile_avatar_frame">(.*?)</div>', resp.text, re.DOTALL)
+                if div_match:
+                    sources = re.findall(r'srcset="([^"]+)"', div_match.group(1))
+                    if sources:
+                        result = sources[-1]
+                        print(f"[get_avatar_frame_url] 找到头像框: {result[:80]}...")
+                        _frame_url_cache[steamid] = (result, time.time())
+                        return result
+                g_match = re.search(r'g_rgProfileData\s*=\s*({.+?});', resp.text, re.DOTALL)
+                if g_match:
+                    try:
+                        raw = g_match.group(1).replace(r'\/', '/')
+                        profile = json.loads(raw)
+                        avatar_frame = profile.get('avatar_frame')
+                        if avatar_frame and isinstance(avatar_frame, dict) and avatar_frame.get('url'):
+                            result = avatar_frame['url']
+                            print(f"[get_avatar_frame_url] 找到头像框(JSON): {result[:80]}...")
+                            _frame_url_cache[steamid] = (result, time.time())
+                            return result
+                    except: pass
+                _frame_url_cache[steamid] = (None, time.time())
+            print(f"[get_avatar_frame_url] 无头像框: steamid={steamid}")
+    except Exception as e:
+        print(f"[get_avatar_frame_url] 异常: {e}")
+    return None
+
+def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
+    import hashlib, time
+    frame_dir = os.path.join(data_dir, "avatar_frames")
+    os.makedirs(frame_dir, exist_ok=True)
+    refresh_interval = _cache_config.get("avatar_frame", 604800)
+    # 优先本地扫描：检查是否有该 steamid 的缓存文件
+    if os.path.exists(frame_dir):
+        for fname in os.listdir(frame_dir):
+            if fname.startswith(f"{steamid}_") and fname.endswith(".png"):
+                path = os.path.join(frame_dir, fname)
+                if refresh_interval > 0 and time.time() - os.path.getmtime(path) < refresh_interval:
+                    return path
+                elif refresh_interval == 0:
+                    return path
+    # 本地无缓存 + 有URL → 下载
+    if not url:
+        return None
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+    path = os.path.join(frame_dir, f"{steamid}_{url_hash}.png")
+    if refresh_interval > 0 and os.path.exists(path) and time.time() - os.path.getmtime(path) < refresh_interval:
+        return path
+    elif refresh_interval == 0 and os.path.exists(path):
+        return path
+    try:
+        resp = httpx.get(url, timeout=10, proxy=proxy)
+        if resp.status_code == 200:
+            with open(path, "wb") as f: f.write(resp.content)
+            return path
+    except Exception: pass
     return path if os.path.exists(path) else None
 
 async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
@@ -120,8 +201,12 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
     os.makedirs(cover_dir, exist_ok=True)
     path = os.path.join(cover_dir, f"{gameid}.jpg")
     # 只在本地不存在时才云端获取
-    if os.path.exists(path):
+    cover_refresh = _cache_config.get("cover_vertical", 0)
+    if cover_refresh == 0 and os.path.exists(path):
         return path
+    elif cover_refresh > 0 and os.path.exists(path):
+        if time.time() - os.path.getmtime(path) < cover_refresh:
+            return path
     # 只尝试 SGDB 竖版封面
     url = await get_sgdb_vertical_cover(game_name, sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
     if url:
@@ -229,7 +314,7 @@ def get_font_path(font_name):
         return font_path2
     return font_name
 
-def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None):
+def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None):
     # 字体
     fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
@@ -296,6 +381,14 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
             avatar_rgba = avatar.copy()
             avatar_rgba.putalpha(mask)
             img.alpha_composite(avatar_rgba, (avatar_x, avatar_y))
+            if avatar_frame_path and os.path.exists(avatar_frame_path):
+                try:
+                    frame_size = AVATAR_SIZE + 12
+                    frame_offset = (frame_size - AVATAR_SIZE) // 2
+                    frame_img = Image.open(avatar_frame_path).convert("RGBA").resize((frame_size, frame_size), Image.LANCZOS)
+                    img.alpha_composite(frame_img, (avatar_x - frame_offset, avatar_y - frame_offset))
+                except Exception as e:
+                    print(f"[render_game_start_image] 头像框渲染失败: {e}")
             # 超能力文本渲染（头像下方居中两行）
             if superpower:
                 try:
@@ -363,7 +456,10 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
         draw.text((text_x + 8, text_y + line_height*2 + idx*line_height), line, font=font, fill=(129,173,81,255))
     # 游戏时长（紧跟在最后一行游戏名下方，无多余空行）
     if playtime_hours is not None:
-        playtime_str = f"游戏时间 {playtime_hours} 小时"
+        if playtime_unowned:
+            playtime_str = "游戏时间 缺省"
+        else:
+            playtime_str = f"游戏时间 {playtime_hours} 小时"
         y_time = text_y + line_height*2 + len(game_name_lines)*line_height + 4  # 仅加4像素间距
         draw.text(
             (text_x + 8, y_time),
@@ -384,9 +480,15 @@ async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, 
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
     playtime_hours = None
+    playtime_unowned = False
     if api_key:
         playtime_hours = await get_playtime_hours(api_key, steamid, gameid, proxy=proxy)
-    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path)
+        playtime_unowned = (playtime_hours == 0.0)
+    avatar_frame_path = get_avatar_frame_path(data_dir, steamid, proxy=proxy)
+    if not avatar_frame_path:
+        avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
+        avatar_frame_path = get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
+    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

@@ -2,6 +2,7 @@ import time
 import io
 from typing import Optional
 from .steam_list_render import render_steam_list_image
+from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
 
 async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
     '''列出所有玩家当前状态（图片美化版，分群支持）'''
@@ -101,8 +102,29 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
                 'play_str': '',
                 'lastlogoff': lastlogoff
             })
+    # 获取所有用户的头像框
+    avatar_frame_paths = {}
+    for u in user_list:
+        sid = u.get("sid", "")
+        if sid:
+            fp = get_avatar_frame_path(self.data_dir, sid, proxy=proxy)
+            if not fp:
+                frame_url = await get_avatar_frame_url(sid, proxy=proxy)
+                if frame_url:
+                    fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=proxy)
+            if fp:
+                avatar_frame_paths[sid] = fp
     # 渲染图片
-    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy)
+    # 获取封面
+    covers = {}
+    for u in user_list:
+        gid = u.get('gameid', '')
+        if gid:
+            from .game_start_render import get_cover_path
+            cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=proxy)
+            if cp:
+                covers[u['sid']] = cp
+    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
     if img_bytes:
         with io.BytesIO(img_bytes) as buf:
             import tempfile

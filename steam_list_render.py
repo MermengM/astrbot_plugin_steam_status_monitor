@@ -3,6 +3,7 @@ import io
 import math
 import httpx
 from PIL import Image, ImageDraw, ImageFont
+from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
 import asyncio
 import logging
 
@@ -12,6 +13,7 @@ STEAM_BG_TOP = (44, 62, 80)
 STEAM_BG_BOTTOM = (24, 32, 44)
 CARD_BG = (38, 44, 56, 230)
 CARD_RADIUS = 12
+COVER_LIST_W, COVER_LIST_H = 50, 75
 AVATAR_SIZE = 72
 AVATAR_RADIUS = 12
 CARD_HEIGHT = 110
@@ -100,7 +102,7 @@ def get_font_path(font_name):
         return font_path2
     return font_name
 
-async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None):
+async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None, avatar_frame_paths=None, covers=None):
     # 字体
     if font_path is None:
         font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansHans-Regular.otf')
@@ -153,6 +155,18 @@ async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=Non
             mask = Image.new("L", (AVATAR_SIZE, AVATAR_SIZE), 0)
             ImageDraw.Draw(mask).rounded_rectangle((0,0,AVATAR_SIZE,AVATAR_SIZE), radius=AVATAR_RADIUS, fill=255)
             card.paste(avatar, (18, (CARD_HEIGHT-AVATAR_SIZE)//2), mask)
+            # 头像框
+            if avatar_frame_paths and user["sid"] in avatar_frame_paths:
+                try:
+                    frame_path = avatar_frame_paths[user["sid"]]
+                    frame_size = AVATAR_SIZE + 12
+                    frame_offset = (frame_size - AVATAR_SIZE) // 2
+                    frame_img = Image.open(frame_path).convert("RGBA").resize((frame_size, frame_size), Image.LANCZOS)
+                    frame_x = 18 - frame_offset
+                    frame_y = (CARD_HEIGHT-AVATAR_SIZE)//2 - frame_offset
+                    card.alpha_composite(frame_img, (frame_x, frame_y))
+                except Exception as e:
+                    print(f"[steam_list_render] 头像框渲染失败: {e}")
         # 顺序：玩家名（游戏时浅绿色），在线状态/游戏名（深绿色），上次在线/已游玩时间
         name_x = 18+AVATAR_SIZE+18
         name_y = 18
@@ -183,6 +197,27 @@ async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=Non
             card_draw.text((name_x, status_y), "异常", font=font_game, fill=(255,120,120))
             info_y = status_y + 26
             card_draw.text((name_x, info_y), user['play_str'], font=font_small, fill=(255,120,120))
+        # 群号 + SteamID（alllist专用）
+        sid_y = info_y + 22 if (user.get('play_str') or user['status'] != 'error') else status_y + 24
+        if user.get('group_id'):
+            card_draw.text((name_x, sid_y), f"群: {user['group_id']} | {user['sid']}", font=font_small, fill=(120,140,160))
+        # 下次轮询时间
+        if user.get('poll_str'):
+            poll_y = sid_y + 18
+            card_draw.text((name_x, poll_y), user['poll_str'], font=font_small, fill=(100,120,140))
+        # 游戏竖版封面（右侧）
+        if covers and user.get('sid') in covers:
+            try:
+                cover_img = Image.open(covers[user['sid']]).convert('RGBA')
+                cw, ch = COVER_LIST_W, COVER_LIST_H
+                cover_img = cover_img.resize((cw, ch), Image.LANCZOS)
+                cx = width-2*CARD_MARGIN - cw - 18
+                cy = (CARD_HEIGHT - ch) // 2
+                # 画框边框
+                card_draw.rounded_rectangle((cx-2, cy-2, cx+cw+2, cy+ch+2), radius=4, outline=(255,255,255,180), width=2)
+                card.alpha_composite(cover_img, (cx, cy))
+            except Exception as e:
+                print(f"[steam_list_render] 封面渲染失败: {e}")
         img.alpha_composite(card, (left, top))
     # 统计
     stat_str = f"在线: {sum(1 for u in user_list if u['status']=='online' or u['status']=='playing')} / 总数: {len(user_list)}"
