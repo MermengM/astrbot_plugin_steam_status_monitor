@@ -287,24 +287,36 @@ class SteamStatusMonitorV3(Star):
             logger.warning(f"保存 play_records.json 失败: {e}")
 
     def _load_rank_push_groups(self):
-        """加载开启了每日排行榜推送的群列表"""
+        """加载开启了每日排行榜推送的群列表及 rank_push_all 标志"""
         path = os.path.join(self.data_dir, "rank_push_groups.json")
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    self.rank_push_groups = json.load(f)
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    self.rank_push_groups = raw.get("groups", [])
+                    self.rank_push_all = raw.get("all", False)
+                elif isinstance(raw, list):
+                    # 兼容旧格式（纯列表）
+                    self.rank_push_groups = raw
+                    self.rank_push_all = False
+                else:
+                    self.rank_push_groups = []
+                    self.rank_push_all = False
             except Exception as e:
                 logger.warning(f"加载 rank_push_groups.json 失败: {e}")
                 self.rank_push_groups = []
+                self.rank_push_all = False
         else:
             self.rank_push_groups = []
+            self.rank_push_all = False
 
     def _save_rank_push_groups(self):
-        """保存开启了每日排行榜推送的群列表"""
+        """保存开启了每日排行榜推送的群列表及 rank_push_all 标志"""
         path = os.path.join(self.data_dir, "rank_push_groups.json")
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.rank_push_groups, f, ensure_ascii=False)
+                json.dump({"groups": self.rank_push_groups, "all": getattr(self, 'rank_push_all', False)}, f, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"保存 rank_push_groups.json 失败: {e}")
 
@@ -1225,16 +1237,10 @@ class SteamStatusMonitorV3(Star):
         """每日自动推送昨日（4:00~4:00）排行榜到已开启的群。test_mode=True 时立即触发不检查日期去重"""
         try:
             is_all = getattr(self, 'rank_push_all', False)
-            # 确定要推送的群列表
-            if is_all:
-                target_groups = list(getattr(self, 'notify_sessions', {}).keys())
-                if not target_groups:
-                    logger.warning("[排行榜] rank_push_all=True 但 notify_sessions 为空，无群可推送")
-                    return
-            else:
-                target_groups = list(self.rank_push_groups)
+            # 推送目标严格来自 rank_push_groups（只有显式开启 rank_on 的群才推送）
+            target_groups = list(self.rank_push_groups)
             if not target_groups:
-                logger.warning("[排行榜] 没有目标群可推送")
+                logger.warning("[排行榜] 没有目标群可推送（请先使用 /steam rank_on 或 /steam rank_on all 开启推送）")
                 return
             # 获取排行榜数据：rank_push_all 时使用全局排行 (group_id=None)
             rank_data = self._get_rank_data(days=1, group_id=None if is_all else None, base_day_offset=-1)
@@ -1426,16 +1432,39 @@ class SteamStatusMonitorV3(Star):
             async for r in self._deny(event):
                 yield r
             return
-        '''已开启本群每日排行榜推送；参数 all=全局排行，test=即刻触发一次推送'''
+        '''每日排行榜推送管理；参数: all=全局排行, list=查看状态, test=即刻推送, del [群号]=删除推送'''
         param = param.strip().lower()
+        if param == "list":
+            is_all = getattr(self, 'rank_push_all', False)
+            groups = list(self.rank_push_groups)
+            if groups:
+                mode = '全局' if is_all else '分群'
+                yield event.plain_result(f"当前排行榜推送模式：{mode}排行，推送群：{', '.join(groups)}")
+            else:
+                yield event.plain_result("当前未开启任何排行榜推送。使用 /steam rank_on 或 /steam rank_on all 开启。")
+            return
         if param == "test":
-            # 即刻触发一次推送（不改变配置）
             yield event.plain_result("正在生成昨日排行榜，稍等...")
             await self._daily_rank_push(test_mode=True)
             return
+        if param.startswith("del"):
+            parts = param.split()
+            if len(parts) >= 2:
+                target = parts[1]
+            else:
+                target = event.get_group_id() or "default"
+            if target in self.rank_push_groups:
+                self.rank_push_groups.remove(target)
+                self._save_rank_push_groups()
+                yield event.plain_result(f"已关闭群 {target} 的每日排行榜推送。")
+            else:
+                yield event.plain_result(f"群 {target} 未在推送列表中。")
+            return
         if param == "all":
             self.rank_push_all = True
-            self.rank_push_groups = []
+            group_id = event.get_group_id() or "default"
+            if group_id not in self.rank_push_groups:
+                self.rank_push_groups.append(group_id)
             self._save_rank_push_groups()
             yield event.plain_result("已开启每日排行榜自动推送（全局排行）")
         else:
@@ -1445,18 +1474,6 @@ class SteamStatusMonitorV3(Star):
                 self.rank_push_groups.append(group_id)
                 self._save_rank_push_groups()
             yield event.plain_result(f"已开启本群每日排行榜自动推送。")
-    @filter.command("steam rank_off")
-    async def steam_rank_off(self, event: AstrMessageEvent):
-        if not self._check_perm(event, 3):
-            async for r in self._deny(event):
-                yield r
-            return
-        '''关闭本群每日排行榜自动推送'''
-        group_id = event.get_group_id() or "default"
-        if group_id in self.rank_push_groups:
-            self.rank_push_groups.remove(group_id)
-            self._save_rank_push_groups()
-        yield event.plain_result(f"已关闭本群每日排行榜自动推送。")
 
     @filter.command("steam help")
     async def steam_help(self, event: AstrMessageEvent):
@@ -1481,8 +1498,9 @@ class SteamStatusMonitorV3(Star):
             "/steam rank 天数 - 查看本群指定天数排行榜（如 7, 30）\n"
             "/steam allrank - 查看所有群今日排行榜\n"
             "/steam allrank 天数 - 查看所有群指定天数排行榜\n"
-            "/steam rank_on - 开启每日排行榜自动推送（8:30推送昨日）\n"
-            "/steam rank_off - 关闭每日排行榜自动推送\n"
+            "/steam rank_on [all|list|test|del] - 管理每日排行榜推送（可配置时间）\n"
+            "/steam rank_on list - 查看推送状态\n"
+            "/steam rank_on del [群号] - 删除指定群推送（默认本群）\n"
             "/steam rs - 清除状态并初始化\n"
             "/steam help - 显示本帮助\n"
         )
