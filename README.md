@@ -117,6 +117,11 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.1.5（2026/07/05）
+  - **Bug 修复**：定时排行榜推送 (rank_on / rank_on all) 无法正常推送，rank_push_all 模式下目标群为空
+  - **新增配置**：排行榜每日推送时间可自定义（rank_push_hour / rank_push_minute，默认 8:30）
+  - **新增指令**：/steam rank_on test 即刻触发一次昨日排行榜推送
+
 - V3.1.4（2026/07/05）
   - **性能优化**：steam_list / steam_alllist / steam_on 初始化全部改用批量查询接口，大幅减少 API 调用次数
 

@@ -29,7 +29,7 @@ from .superpower_util import load_abilities, get_daily_superpower  # 新增导�
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.1.4",
+    "3.1.5",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -413,6 +413,8 @@ class SteamStatusMonitorV3(Star):
         self._recorded_quit_cache = {}      # {(steamid, gameid): timestamp} 去重用
         self.rank_push_groups = []          # 开启了每日排行榜推送的群列表
         self.rank_push_all = False           # True=全群统一推送全局排行（只渲染一次）
+        self.rank_push_hour = self.config.get('rank_push_hour', 8)
+        self.rank_push_minute = self.config.get('rank_push_minute', 30)
         self._last_rank_push_date = None    # 记录上次推送日期，防止同一天重复推送
         self._load_play_records()
         self._load_rank_push_groups()
@@ -492,13 +494,15 @@ class SteamStatusMonitorV3(Star):
                     else:
                         logger.info("周期轮询成功")
                 self._last_round_logs.clear()
-                # 每日排行榜自动推送：8:30 检查并发送昨日排行榜（以凌晨4:00为一天分界）
+                # 每日排行榜自动推送（以凌晨4:00为一天分界，推送时间可在配置中设定）
                 now_dt = datetime.now()
-                if now_dt.hour == 8 and now_dt.minute == 30:
+                push_hour = getattr(self, 'rank_push_hour', 8)
+                push_minute = getattr(self, 'rank_push_minute', 30)
+                if now_dt.hour == push_hour and now_dt.minute == push_minute:
                     push_date_key = self._get_day_key(-1)
                     if self._last_rank_push_date != push_date_key and hasattr(self, 'rank_push_groups') and (self.rank_push_groups or getattr(self, 'rank_push_all', False)):
                         self._last_rank_push_date = push_date_key
-                        logger.info(f"[排行榜] 开始每日自动推送，目标群: {self.rank_push_groups}")
+                        logger.info(f"[排行榜] 开始每日自动推送，时间={push_hour}:{push_minute:02d}，目标群: {self.rank_push_groups if self.rank_push_groups else '全部群(rank_push_all)'}")
                         asyncio.create_task(self._daily_rank_push())
                 # 节流保存：本轮有脏数据且超过间隔则落盘，避免每次 check_status_change 都写盘
                 if getattr(self, '_data_dirty', False) and (time.time() - getattr(self, '_last_save_time', 0)) >= getattr(self, '_save_interval', 300):
@@ -1217,83 +1221,75 @@ class SteamStatusMonitorV3(Star):
         self._save_persistent_data(force=True)  # 清空后保存
         yield event.plain_result("Steam状态监控插件已重置，所有状态已清空。")
 
-    async def _daily_rank_push(self):
-        """每日8:30自动推送昨日（4:00~4:00）排行榜到已开启的群"""
+    async def _daily_rank_push(self, test_mode=False):
+        """每日自动推送昨日（4:00~4:00）排行榜到已开启的群。test_mode=True 时立即触发不检查日期去重"""
         try:
-            for group_id in list(self.rank_push_groups):
+            is_all = getattr(self, 'rank_push_all', False)
+            # 确定要推送的群列表
+            if is_all:
+                target_groups = list(getattr(self, 'notify_sessions', {}).keys())
+                if not target_groups:
+                    logger.warning("[排行榜] rank_push_all=True 但 notify_sessions 为空，无群可推送")
+                    return
+            else:
+                target_groups = list(self.rank_push_groups)
+            if not target_groups:
+                logger.warning("[排行榜] 没有目标群可推送")
+                return
+            # 获取排行榜数据：rank_push_all 时使用全局排行 (group_id=None)
+            rank_data = self._get_rank_data(days=1, group_id=None if is_all else None, base_day_offset=-1)
+            if not rank_data:
+                logger.info("[排行榜] 昨日无游玩记录，跳过推送")
+                return
+            # 补充玩家信息（只渲染一次，所有群共用同一张图）
+            sid_set = {p["sid"] for p in rank_data}
+            sid_info = {}
+            if sid_set:
+                status_map = await self.fetch_player_statuses_batch(list(sid_set))
+                for sid, info in status_map.items():
+                    sid_info[sid] = {"name": info.get("name") or sid, "avatar_url": info.get("avatarfull") or info.get("avatar")}
+            for p in rank_data:
+                info = sid_info.get(p["sid"], {})
+                p["name"] = info.get("name", p["sid"][-8:])
+                p["avatar_url"] = info.get("avatar_url")
+                p["top_game_id"] = None
+            # 反查封面gameid
+            yesterday = self._get_day_key(-1)
+            for p in rank_data:
+                if not p["games"]: continue
+                top_name = p["games"][0]["name"]
+                day_data = self.play_records.get(yesterday, {})
+                sid_games = day_data.get(p["sid"], {})
+                for gid, ginfo in sid_games.items():
+                    if ginfo.get("name") == top_name:
+                        p["top_game_id"] = gid
+                        break
+            async def cover_fetcher(gameid):
+                return await self.get_game_cover_url(gameid)
+            # 获取头像框路径
+            avatar_frame_paths = {}
+            from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
+            for p in rank_data:
+                sid = p.get("sid", "")
+                if sid:
+                    fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
+                    if not fp:
+                        frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
+                        if frame_url: fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
+                    if fp: avatar_frame_paths[sid] = fp
+            font_path = self.get_font_path('NotoSansHans-Regular.otf')
+            img_bytes = await render_rank_image(self.data_dir, rank_data, "昨日", font_path=font_path, proxy=self.proxy, cover_fetcher=cover_fetcher, avatar_frame_paths=avatar_frame_paths)
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                tmp_path = tmp.name
+            # 推送到所有目标群
+            for group_id in target_groups:
                 try:
-                    # 获取昨日数据：_get_rank_data 使用 _get_day_key(0) 作为基准，需要传入 days=1 统计当天
-                    # 但我们要前一天的数据，通过 _get_day_key(-1) 做基准
-                    # 简单方案：临时覆写 _get_day_key 的效果，直接传一个特殊值
-                    # 这里直接用 days=1 并让 _get_rank_data 获取当天(4:00-4:00)的数据
-                    # 但定时在8:30，_get_day_key(0) 返回的是当天的日期（如1月15日4:00之后）
-                    # 我们需要的是昨天的数据（1月14日4:00~1月15日4:00）
-                    # 因此把 days 设为从昨天开始统计1天
-                    rank_data = self._get_rank_data(days=1, group_id=group_id, base_day_offset=-1)
-                    if not rank_data:
-                        logger.info(f"[排行榜] 群 {group_id} 昨日无游玩记录，跳过推送")
-                        continue
-                    # 补充玩家信息
-                    sid_set = {p["sid"] for p in rank_data}
-                    sid_info = {}
-                    if sid_set:
-                        status_map = await self.fetch_player_statuses_batch(list(sid_set))
-                        for sid, info in status_map.items():
-                            sid_info[sid] = {
-                                "name": info.get("name") or sid,
-                                "avatar_url": info.get("avatarfull") or info.get("avatar")
-                            }
-                    for p in rank_data:
-                        info = sid_info.get(p["sid"], {})
-                        p["name"] = info.get("name", p["sid"][-8:])
-                        p["avatar_url"] = info.get("avatar_url")
-                        p["top_game_id"] = None
-                    # 反查封面gameid
-                    yesterday = self._get_day_key(-1)
-                    for p in rank_data:
-                        if not p["games"]:
-                            continue
-                        top_name = p["games"][0]["name"]
-                        day_data = self.play_records.get(yesterday, {})
-                        sid_games = day_data.get(p["sid"], {})
-                        for gid, ginfo in sid_games.items():
-                            if ginfo.get("name") == top_name:
-                                p["top_game_id"] = gid
-                                break
-
-                    async def cover_fetcher(gameid):
-                        return await self.get_game_cover_url(gameid)
-
-                    # 获取头像框路径
-                    avatar_frame_paths = {}
-                    from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
-                    for p in rank_data:
-                        sid = p.get("sid", "")
-                        if sid:
-                            fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
-                            if not fp:
-                                frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
-                                if frame_url:
-                                    fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
-                            if fp:
-                                avatar_frame_paths[sid] = fp
-
-                    font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                    img_bytes = await render_rank_image(
-                        self.data_dir, rank_data, "昨日",
-                        font_path=font_path, proxy=self.proxy,
-                        cover_fetcher=cover_fetcher,
-                        avatar_frame_paths=avatar_frame_paths
-                    )
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                        tmp.write(img_bytes)
-                        tmp_path = tmp.name
-                    # 发送到群
                     session = getattr(self, 'notify_sessions', {}).get(group_id, None)
                     if session:
                         await self.context.send_message(session, MessageChain([
-                            Plain(f"📊 昨日游戏时长排行榜来啦！\n"),
+                            Plain("📊 昨日游戏时长排行榜来啦！\n"),
                             Image.fromFileSystem(tmp_path)
                         ]))
                         logger.info(f"[排行榜] 已推送昨日排行榜到群 {group_id}")
@@ -1303,7 +1299,6 @@ class SteamStatusMonitorV3(Star):
                     logger.error(f"[排行榜] 推送群 {group_id} 失败: {e}")
         except Exception as e:
             logger.error(f"[排行榜] 每日推送异常: {e}")
-
     async def _render_and_send_rank(self, event, group_id, days, period_label, is_all=False):
         """生成排行榜图片并发送"""
         try:
@@ -1426,19 +1421,18 @@ class SteamStatusMonitorV3(Star):
             yield result
 
     @filter.command("steam rank_on")
-    
-    @filter.command("steam rank_on")
     async def steam_rank_on(self, event: AstrMessageEvent, param: str = ""):
         if not self._check_perm(event, 3):
             async for r in self._deny(event):
                 yield r
             return
-        '''已开启本群每日排行榜推送；可选参数 all 则推送全局排行'''
-        if not self._check_perm(event, 3):
-            async for r in self._deny(event):
-                yield r
-            return
+        '''已开启本群每日排行榜推送；参数 all=全局排行，test=即刻触发一次推送'''
         param = param.strip().lower()
+        if param == "test":
+            # 即刻触发一次推送（不改变配置）
+            yield event.plain_result("正在生成昨日排行榜，稍等...")
+            await self._daily_rank_push(test_mode=True)
+            return
         if param == "all":
             self.rank_push_all = True
             self.rank_push_groups = []
@@ -1451,7 +1445,6 @@ class SteamStatusMonitorV3(Star):
                 self.rank_push_groups.append(group_id)
                 self._save_rank_push_groups()
             yield event.plain_result(f"已开启本群每日排行榜自动推送。")
-
     @filter.command("steam rank_off")
     async def steam_rank_off(self, event: AstrMessageEvent):
         if not self._check_perm(event, 3):
