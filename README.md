@@ -116,6 +116,12 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.1.10（2026/07/06）
+  - **Bug 修复**：修复 WebUI 保存配置时 smart_poll_intervals 类型校验失败（list vs string），init 阶段强制归一化为逗号分隔字符串
+  - **代理增强**：SOCKS5 代理自动安装 socksio 依赖（pip install httpx[socks]），安装失败则打印清晰指引
+  - **代理增强**：fetch_player_status / fetch_player_statuses_batch 异常处理加固，try 包裹 async with httpx.AsyncClient，防止 context manager 异常穿透到主轮询
+  - **依赖更新**：requirements.txt httpx → httpx[socks]
+
 - V3.1.9（2026/07/06）
   - **Bug 修复**：Steam API 返回非 dict 错误响应（如 x-eresult: 84）时不再崩溃，改为优雅降级并输出诊断日志
   - **Bug 修复**：addid 分隔符从 [,.\s] 改为仅中英文逗号，避免 URL 中的 . 被错误截断

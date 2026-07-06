@@ -29,7 +29,7 @@ from .superpower_util import load_abilities, get_daily_superpower  # 新增导�
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.1.9",
+    "3.1.10",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -364,6 +364,25 @@ class SteamStatusMonitorV3(Star):
         self.ENABLE_PROXY = self.config.get('enable_proxy', False)
         self.PROXY_URL = self.config.get('proxy_url', '')
         self.proxy = self.PROXY_URL if self.ENABLE_PROXY and self.PROXY_URL else None
+        # 代理前置校验：若启用 SOCKS 代理但未安装 socksio，尝试自动安装
+        if self.proxy and self.proxy.startswith('socks'):
+            try:
+                import socksio
+            except ImportError:
+                logger.info(f'[SteamStatusMonitor] 检测到 SOCKS 代理 ({self.proxy})，socksio 未安装，尝试自动安装...')
+                import subprocess, sys
+                try:
+                    subprocess.check_call(
+                        [sys.executable, '-m', 'pip', 'install', 'httpx[socks]', '-q'],
+                        timeout=60
+                    )
+                    import socksio
+                    logger.info('[SteamStatusMonitor] socksio 自动安装成功')
+                except Exception as ie:
+                    logger.error(
+                        f'[SteamStatusMonitor] socksio 自动安装失败: {ie}。'
+                        f'请手动执行: pip install httpx[socks]'
+                    )
         self.max_group_size = self.config.get('max_group_size', 20)
         self.GROUP_ID = None  # 当前操作群号，指令时动态赋值
         self.fixed_poll_interval = self.config.get('fixed_poll_interval', 0)  # 新增：固定轮询间隔，0为智能轮询
@@ -377,6 +396,8 @@ class SteamStatusMonitorV3(Star):
             self.smart_poll_intervals = [int(x.strip()) for x in raw_intervals.split(",") if x.strip()]
         else:
             self.smart_poll_intervals = list(raw_intervals)
+        # 归一化回字符串写入 config，防止 WebUI schema 校验类型错误
+        self.config['smart_poll_intervals'] = ",".join(str(x) for x in self.smart_poll_intervals)
         # 数据持久化目录
         self.data_dir = os.path.join("data", "steam_status_monitor")
         os.makedirs(self.data_dir, exist_ok=True)
@@ -594,8 +615,8 @@ class SteamStatusMonitorV3(Star):
         delay = 1
         retry = retry if retry is not None else self.RETRY_TIMES
         for attempt in range(retry):
-            async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
-                try:
+            try:
+                async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
                     resp = await client.get(url)
                     if resp.status_code != 200:
                         raise Exception(f"HTTP {resp.status_code}")
@@ -619,11 +640,11 @@ class SteamStatusMonitorV3(Star):
                         'avatarfull': player.get('avatarfull'),
                         'avatar': player.get('avatar')
                     }
-                except Exception as e:
-                    logger.warning(f"拉取 Steam 状态失败: {e} (SteamID: {steam_id}, 第{attempt+1}次重试)")
-                    if attempt < retry - 1:
-                        await asyncio.sleep(delay)
-                        delay *= 2
+            except Exception as e:
+                logger.warning(f"拉取 Steam 状态失败: {e} (SteamID: {steam_id}, 第{attempt+1}次重试)")
+                if attempt < retry - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
         logger.error(f"SteamID {steam_id} 状态获取失败，已重试{retry}次")
         return None
 
@@ -686,9 +707,12 @@ class SteamStatusMonitorV3(Star):
                         # 降级：批量失败时回退到逐个查询，保证可用性
                         for sid in batch:
                             if sid not in result:
-                                single = await self.fetch_player_status(sid, retry=1)
-                                if single:
-                                    result[sid] = single
+                                try:
+                                    single = await self.fetch_player_status(sid, retry=1)
+                                    if single:
+                                        result[sid] = single
+                                except Exception as se:
+                                    logger.warning(f'[批量查询] 单查降级也失败 (SteamID={sid}): {se}')
         return result
 
     async def resolve_steam_input(self, raw):
