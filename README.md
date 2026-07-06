@@ -90,8 +90,7 @@
 - `/steam openbox [SteamID]` 查看指定SteamID的全部详细信息
 - `/steam rank [天数]` 查看本群游戏时长排行榜（默认今日，可指定天数）
 - `/steam allrank [天数]` 查看所有群游戏时长排行榜（默认今日，可指定天数）
-- `/steam rank_on` 开启每日排行榜自动推送
-- `/steam rank_off` 关闭每日排行榜自动推送
+- `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（all=全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
 - `/steam rs` 清除所有状态并初始化
 - `/steam achievement_on` 开启本群Steam成就推送
 - `/steam achievement_off` 关闭本群Steam成就推送
@@ -117,6 +116,12 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.1.9（2026/07/06）
+  - **Bug 修复**：Steam API 返回非 dict 错误响应（如 x-eresult: 84）时不再崩溃，改为优雅降级并输出诊断日志
+  - **Bug 修复**：addid 分隔符从 [,.\s] 改为仅中英文逗号，避免 URL 中的 . 被错误截断
+  - **Bug 修复**：ResolveVanityURL 同样加 isinstance 守卫，防止异常响应导致崩溃
+  - **指令优化**：README 更新 rank_on 统一用法，移除已废弃的 rank_off
+
 - V3.1.8（2026/07/05）
   - **指令增强**：/steam delid 支持跨群删除（私聊传群号），退群也能清理监控
 
