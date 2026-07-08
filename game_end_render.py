@@ -5,7 +5,7 @@ import time
 import asyncio
 import httpx
 from PIL import Image, ImageDraw, ImageFont
-from .game_start_render import get_avatar_frame_url, get_avatar_frame_path, _cache_config
+from .game_start_render import get_avatar_frame_url, get_avatar_frame_path, _cache_config, get_horizontal_cover_path
 
 # 更深的蓝紫色到黑色渐变
 BG_COLOR_TOP = (24, 18, 48)   # 顶部深蓝紫
@@ -17,7 +17,6 @@ IMG_W, IMG_H = 512, 192
 # 星星素材路径（假定与本文件同目录）
 STAR_BG_PATH = os.path.join(os.path.dirname(__file__), "随机散布的小星星767x809xp.png")
 
-SGDB_API_KEY = "00c703ea9a664ce236526aca0faeaaf4"
 
 async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
     import httpx
@@ -226,7 +225,7 @@ def text_wrap(text, font, max_width):
         lines.append(line)
     return lines
 
-def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None):
+def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None, horizontal_cover_path=None):
     # 字体
     fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
@@ -278,6 +277,19 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
                 cover_resized = cover_resized.crop((0, 0, IMG_W, new_h))
                 new_w = IMG_W
             img.paste(cover_resized, (0, 0), cover_resized)
+            # 竖版封面缺失（missingcover）时，叠加横版header_image
+            if os.path.basename(cover_path) == "missingcover.jpg" and horizontal_cover_path and os.path.exists(horizontal_cover_path):
+                try:
+                    h_cover = Image.open(horizontal_cover_path).convert("RGBA")
+                    h_scale = new_w / h_cover.width
+                    h_new_w = new_w
+                    h_new_h = int(h_cover.height * h_scale)
+                    h_cover_resized = h_cover.resize((h_new_w, h_new_h), Image.LANCZOS)
+                    h_offset_y = (cover_area_h - h_new_h) // 2
+                    img.paste(h_cover_resized, (0, h_offset_y), h_cover_resized)
+                    print(f"[game_end_render] 横版封面叠加成功: {horizontal_cover_path} ({h_new_w}x{h_new_h})")
+                except Exception as e:
+                    print(f"[game_end_render] 横版封面叠加失败: {e}")
         except Exception as e:
             print(f"[game_end_render] 封面加载失败: {e}")
             new_w = COVER_W  # 渲染失败时使用默认宽度
@@ -387,11 +399,13 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
 async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, game_name, end_time_str, tip_text, duration_h, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None):
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
+    # 获取横版封面（竖版缺失时叠加用）
+    horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy)
     avatar_frame_path = get_avatar_frame_path(data_dir, steamid, proxy=proxy)
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
         avatar_frame_path = get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
-    img = render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=font_path, avatar_frame_path=avatar_frame_path)
+    img = render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=font_path, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

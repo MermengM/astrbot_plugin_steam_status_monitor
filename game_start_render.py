@@ -225,6 +225,34 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
         return missing_cover
     return None
 
+def get_horizontal_cover_path(data_dir, gameid, appid=None, proxy=None):
+    """获取Steam横版header_image封面本地路径，永久缓存（无过期时间）"""
+    import httpx
+    cover_dir = os.path.join(data_dir, "covers_h")
+    os.makedirs(cover_dir, exist_ok=True)
+    path = os.path.join(cover_dir, f"{gameid}.jpg")
+    if os.path.exists(path):
+        return path
+    if not appid:
+        return None
+    try:
+        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&l=schinese"
+        resp = httpx.get(url, timeout=10, proxy=proxy)
+        if resp.status_code == 200:
+            data = resp.json()
+            info = data.get(str(appid), {}).get("data", {})
+            header_img = info.get("header_image")
+            if header_img:
+                img_resp = httpx.get(header_img, timeout=10, proxy=proxy)
+                if img_resp.status_code == 200:
+                    with open(path, "wb") as f:
+                        f.write(img_resp.content)
+                    print(f"[get_horizontal_cover_path] 下载成功: {gameid} -> {path}")
+                    return path
+    except Exception as e:
+        print(f"[get_horizontal_cover_path] 获取横版封面异常: {e}")
+    return path if os.path.exists(path) else None
+
 def text_wrap(text, font, max_width):
     """自动换行，返回行列表"""
     lines = []
@@ -314,7 +342,7 @@ def get_font_path(font_name):
         return font_path2
     return font_name
 
-def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None):
+def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None):
     # 字体
     fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
@@ -346,6 +374,19 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
             new_h = cover_area_h
             cover_resized = cover_src.resize((new_w, new_h), Image.LANCZOS)
             img.paste(cover_resized, (0, 0), cover_resized)
+            # 竖版封面缺失（missingcover）时，叠加横版header_image
+            if os.path.basename(cover_path) == "missingcover.jpg" and horizontal_cover_path and os.path.exists(horizontal_cover_path):
+                try:
+                    h_cover = Image.open(horizontal_cover_path).convert("RGBA")
+                    h_scale = new_w / h_cover.width
+                    h_new_w = new_w
+                    h_new_h = int(h_cover.height * h_scale)
+                    h_cover_resized = h_cover.resize((h_new_w, h_new_h), Image.LANCZOS)
+                    h_offset_y = (cover_area_h - h_new_h) // 2
+                    img.paste(h_cover_resized, (0, h_offset_y), h_cover_resized)
+                    print(f"[render_game_start_image] 横版封面叠加成功: {horizontal_cover_path} ({h_new_w}x{h_new_h})")
+                except Exception as e:
+                    print(f"[render_game_start_image] 横版封面叠加失败: {e}")
         except Exception as e:
             print(f"[render_game_start_image] 封面渲染失败: {e}")
             new_w = COVER_W  # 渲染失败时使用默认宽度
@@ -479,6 +520,8 @@ async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, 
     print(f"[render_game_start] superpower参数: {superpower}")
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
+    # 获取横版封面（竖版缺失时叠加用）
+    horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy)
     playtime_hours = None
     playtime_unowned = False
     if api_key:
@@ -488,7 +531,7 @@ async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, 
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
         avatar_frame_path = get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
-    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path)
+    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

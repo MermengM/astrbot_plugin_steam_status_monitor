@@ -53,8 +53,8 @@ RANK_TEXT_COLOR = {
 RANK_TEXT_DEFAULT = (143, 152, 160)
 
 AVATAR_SIZE = 72             # 增大头像
-COVER_W = 150                # 放大横版封面
-COVER_H = 70
+COVER_W = 150                # 横版封面宽度（右侧）
+COVER_H = 70                 # 横版封面高度
 MAX_PLAYERS = 25
 
 # 游戏列表表格布局（相对卡片左上角）
@@ -135,22 +135,32 @@ async def _fetch_avatar(avatar_url, data_dir, sid, proxy=None):
     return None
 
 
-def _draw_segment_bar(draw, x, y, w, h, games, colors):
-    """绘制分段彩色进度条"""
-    total = sum(g["minutes"] for g in games)
-    if total <= 0:
-        return
+def _draw_segment_bar(draw, x, y, w, h, games, colors, max_total=None):
+    """绘制分段彩色进度条
+    max_total: Top1玩家的总时长作为100%基准；None则用玩家自己的总时长
+    返回 (fill_w, player_total) 供调用方绘制百分比文字
+    """
+    player_total = sum(g["minutes"] for g in games)
+    if player_total <= 0:
+        return 0, 0
+    if max_total is None or max_total <= 0:
+        max_total = player_total
+    fill_ratio = min(player_total / max_total, 1.0)
+    fill_w = int(w * fill_ratio)
+    if fill_w <= 0:
+        return 0, player_total
     cur_x = x
     for i, (game, color) in enumerate(zip(games, colors)):
-        seg_w = max(1, int(w * game["minutes"] / total))
+        seg_w = max(1, int(fill_w * game["minutes"] / player_total))
         if i == len(games) - 1:
-            seg_w = x + w - cur_x
+            seg_w = x + fill_w - cur_x
         draw.rounded_rectangle(
             (cur_x, y, cur_x + seg_w, y + h),
             radius=h // 2,
             fill=color + (255,)
         )
         cur_x += seg_w
+    return fill_w, player_total
 
 
 async def render_rank_image(data_dir, rank_data, period_label, font_path=None, proxy=None, cover_fetcher=None, avatar_frame_paths=None):
@@ -200,7 +210,23 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
     header_h = 80
     card_area_top = header_h + CARD_MARGIN
     total_min = sum(p["total_minutes"] for p in rank_data)
-    height = card_area_top + n * (CARD_HEIGHT + CARD_GAP) + 30
+    max_total_minutes = rank_data[0]["total_minutes"] if rank_data else 0  # Top1总时长作为进度条100%基准
+    # 预计算每个玩家卡片高度（游戏<=1种则降低高度）
+    card_heights = []
+    for p in rank_data:
+        gc = len(p.get("games", []))
+        if gc <= 1:
+            card_heights.append(155)
+        elif gc == 2:
+            card_heights.append(170)
+        else:
+            card_heights.append(CARD_HEIGHT)
+    total_cards_h = sum(card_heights) + max(0, n - 1) * CARD_GAP
+    height = card_area_top + total_cards_h + 30
+    # 预计算每个卡片Y偏移
+    card_offsets = [card_area_top]
+    for ch in card_heights[:-1]:
+        card_offsets.append(card_offsets[-1] + ch + CARD_GAP)
 
     # 1. 渐变背景
     img = Image.new('RGBA', (WIDTH, height), BG_TOP)
@@ -239,9 +265,9 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
     for idx, player in enumerate(rank_data):
         rank = idx + 1
         cx = CARD_MARGIN
-        cy = card_area_top + idx * (CARD_HEIGHT + CARD_GAP)
+        cy = card_offsets[idx]
         cw = WIDTH - 2 * CARD_MARGIN
-        ch = CARD_HEIGHT
+        ch = card_heights[idx]
 
         border_color = RANK_BORDER.get(rank, RANK_BORDER_DEFAULT)
 
@@ -286,10 +312,10 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
         player_name = _truncate_text(draw, player["name"], font_name, 200)
         draw.text((name_x, cy + 16), player_name, font=font_name, fill=(255, 255, 255))
 
-        # 总时长
-        draw.text((name_x, cy + 44), f"总时长 {_format_hours(player['total_minutes'])}", font=font_time, fill=(102, 192, 244))
+        # 总时长（金色醒目）
+        draw.text((name_x, cy + 44), f"总时长 {_format_hours(player['total_minutes'])}", font=font_time, fill=(255, 200, 60))
 
-        # 横版封面（放大至150x70，右侧）
+        # 横版封面（右侧）
         cover_path = covers[idx] if not isinstance(covers[idx], Exception) else None
         cover_x = cx + cw - COVER_W - 16
         cover_y = cy + 14
@@ -351,7 +377,19 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
         bar_colors = [SEGMENT_COLORS[i % len(SEGMENT_COLORS)] for i in range(len(shown))]
         if other_min > 0:
             bar_colors.append(SEGMENT_COLOR_OTHER)
-        _draw_segment_bar(draw, bar_x, bar_y, bar_w, bar_h, bar_games, bar_colors)
+        # 100%灰色背景条（作为满格基准）
+        draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=bar_h//2, fill=(50, 55, 65, 255))
+        # 实际填充进度条
+        fill_w, _ = _draw_segment_bar(draw, bar_x, bar_y, bar_w, bar_h, bar_games, bar_colors, max_total=max_total_minutes)
+        # 百分比（Top1=100%）
+        if max_total_minutes > 0:
+            pct = round(player["total_minutes"] / max_total_minutes * 100)
+            pct_text = f"{pct}%"
+            try:
+                font_pct = ImageFont.truetype(font_path, 13)
+            except Exception:
+                font_pct = font_small
+            draw.text((bar_x + fill_w + 8, bar_y - 2), pct_text, font=font_pct, fill=(180, 190, 200))
 
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format='PNG')

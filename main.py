@@ -1768,6 +1768,26 @@ class SteamStatusMonitorV3(Star):
             self.config.save_config()
         yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID，相关状态数据已清空。")
 
+    def _should_skip_game(self, gameid):
+        """根据黑白名单配置判断是否应跳过该游戏的监控/播报"""
+        if not gameid:
+            return False
+        mode = self.config.get('game_filter_mode', '全部游戏')
+        if mode == '全部游戏':
+            return False
+        ids_str = self.config.get('game_filter_ids', '')
+        if not ids_str or not ids_str.strip():
+            return False
+        try:
+            filter_ids = [x.strip() for x in ids_str.split(',') if x.strip()]
+        except Exception:
+            return False
+        if mode == '白名单':
+            return str(gameid) not in filter_ids
+        elif mode == '黑名单':
+            return str(gameid) in filter_ids
+        return False
+
     def _get_day_key(self, offset_days=0):
         """基于凌晨4:00边界的日期键
         offset_days=0: 当前所处"天"的日期键
@@ -2016,37 +2036,40 @@ class SteamStatusMonitorV3(Star):
                                 break
                             await asyncio.sleep(1)
                 self.achievement_monitor.clear_game_achievements(group_id, sid, prev_gameid)
-                pending_quit.setdefault(sid, {})[prev_gameid] = {
-                    "quit_time": now,
-                    "name": name,
-                    "game_name": zh_prev_game_name,
-                    "duration_min": duration_min,
-                    "start_time": start_time,
-                    "notified": False
-                }
-                # 成就结算：游戏结束时，延迟15分钟再做一次对比
-                try:
-                    player_name = name
-                    game_name = zh_prev_game_name
-                    key = (group_id, sid, prev_gameid)
-                    poll_task = self.achievement_poll_tasks.pop(key, None)
-                    if poll_task:
-                        poll_task.cancel()
+                if not self._should_skip_game(prev_gameid):
+                    pending_quit.setdefault(sid, {})[prev_gameid] = {
+                        "quit_time": now,
+                        "name": name,
+                        "game_name": zh_prev_game_name,
+                        "duration_min": duration_min,
+                        "start_time": start_time,
+                        "notified": False
+                    }
+                    # 成就结算：游戏结束时，延迟15分钟再做一次对比
+                    try:
+                        player_name = name
+                        game_name = zh_prev_game_name
+                        key = (group_id, sid, prev_gameid)
+                        poll_task = self.achievement_poll_tasks.pop(key, None)
+                        if poll_task:
+                            poll_task.cancel()
+                        if not skip_push:
+                            asyncio.create_task(self.achievement_delayed_final_check(group_id, sid, prev_gameid, player_name, game_name))
+                    except Exception as e:
+                        logger.error(f"结算成就时异常: {e}")
+                    # 启动延迟任务
+                    if not hasattr(self, '_pending_quit_tasks'):
+                        self._pending_quit_tasks = {}
+                    if sid not in self._pending_quit_tasks:
+                        self._pending_quit_tasks[sid] = {}
+                    old_task = self._pending_quit_tasks[sid].get(prev_gameid)
+                    if old_task:
+                        old_task.cancel()
                     if not skip_push:
-                        asyncio.create_task(self.achievement_delayed_final_check(group_id, sid, prev_gameid, player_name, game_name))
-                except Exception as e:
-                    logger.error(f"结算成就时异常: {e}")
-                # 启动延迟任务
-                if not hasattr(self, '_pending_quit_tasks'):
-                    self._pending_quit_tasks = {}
-                if sid not in self._pending_quit_tasks:
-                    self._pending_quit_tasks[sid] = {}
-                old_task = self._pending_quit_tasks[sid].get(prev_gameid)
-                if old_task:
-                    old_task.cancel()
-                if not skip_push:
-                    task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
-                    self._pending_quit_tasks[sid][prev_gameid] = task
+                        task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
+                        self._pending_quit_tasks[sid][prev_gameid] = task
+                else:
+                    logger.info(f"[游戏过滤] {name} 退出游戏 {zh_prev_game_name}({prev_gameid}) 被跳过（黑白名单过滤）")
                 last_quit_times.setdefault(sid, {})[prev_gameid] = now
                 last_states[sid] = status
                 if current_gameid in [None, "", "0"]:
@@ -2081,6 +2104,11 @@ class SteamStatusMonitorV3(Star):
                     last_states[sid] = status
                     continue  # 只推送网络波动提醒，跳过后续逻辑
                 # 修复：补充开始游戏推送逻辑
+                if self._should_skip_game(current_gameid):
+                    logger.info(f"[游戏过滤] {name} 开始游戏 {zh_game_name}({current_gameid}) 被跳过（黑白名单过滤）")
+                    start_play_times.setdefault(sid, {})[current_gameid] = now
+                    last_states[sid] = status
+                    continue
                 start_play_times.setdefault(sid, {})[current_gameid] = now
                 msg = f"🟢【{name}】开始游玩 {zh_game_name}"
                 # 推送到主群和所有push_group
