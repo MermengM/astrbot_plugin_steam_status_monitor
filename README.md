@@ -83,11 +83,11 @@
 - `/steam alllist` 列出所有群聊分组及玩家状态
 - `/steam config` 查看当前插件配置
 - `/steam set [参数] [值]` 设置配置参数（如 `/steam set poll_interval_sec 30`）
-- `/steam addid [SteamID/链接/好友码]` 添加玩家到本群监控列表（支持多种格式）
-- `/steam delid [SteamID]` 从本群监控列表删除SteamID
+- `/steam addid [SteamID/链接/好友码] [@用户] [备注名]` 添加玩家并可选绑定QQ（支持多种格式）
+- `/steam delid [SteamID/好友码/链接]` 从本群监控列表删除SteamID
 - `/steam push_group [SteamID]` 添加id到联动推送的副群（轮询一次通知多个群聊）
 - `/steam delpush_group [SteamID]` 删除id联动推送的副群
-- `/steam openbox [SteamID]` 查看指定SteamID的全部详细信息
+- `/steam openbox [SteamID/好友码/链接]` 查看指定SteamID的全部详细信息
 - `/steam rank [天数]` 查看本群游戏时长排行榜（默认今日，可指定天数）
 - `/steam allrank [天数]` 查看所有群游戏时长排行榜（默认今日，可指定天数）
 - `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（all=全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
