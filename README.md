@@ -88,6 +88,7 @@
 - `/steam push_group [SteamID]` 添加id到联动推送的副群（轮询一次通知多个群聊）
 - `/steam delpush_group [SteamID]` 删除id联动推送的副群
 - `/steam openbox [SteamID/好友码/链接]` 查看指定SteamID的全部详细信息
+- `.steamwho @用户` / `.在干嘛 @用户`  即时查询QQ绑定玩家的Steam状态
 - `/steam rank [天数]` 查看本群游戏时长排行榜（默认今日，可指定天数）
 - `/steam allrank [天数]` 查看所有群游戏时长排行榜（默认今日，可指定天数）
 - `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（all=全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
