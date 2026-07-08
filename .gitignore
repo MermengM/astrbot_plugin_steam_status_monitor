@@ -1,0 +1,7 @@
+__pycache__/
+venv/
+.vscode/
+.github/
+.git-rewrite/
+*.lnk
+test_line.txt
