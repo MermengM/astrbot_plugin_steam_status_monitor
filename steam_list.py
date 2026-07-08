@@ -34,7 +34,7 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
                 'lastlogoff': None
             })
             continue
-        name = status.get('name') or sid
+        name = self._resolve_bind_name(sid, status.get('name') or sid)
         gameid = status.get('gameid')
         game = status.get('gameextrainfo')
         lastlogoff = status.get('lastlogoff')

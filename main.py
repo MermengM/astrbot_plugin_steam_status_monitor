@@ -29,7 +29,7 @@ from .superpower_util import load_abilities, get_daily_superpower  # 新增导�
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.1.10",
+    "3.1.12",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -278,6 +278,41 @@ class SteamStatusMonitorV3(Star):
         except Exception as e:
             logger.warning(f"保存 play_records.json 失败: {e}")
 
+    # ========== QQ-SteamID 绑定系统 ==========
+
+    def _load_bind_data(self):
+        """加载QQ-SteamID绑定数据"""
+        path = os.path.join(self.data_dir, "bind_data.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self._bind_data = json.load(f)
+            except Exception as e:
+                logger.warning(f"加载 bind_data.json 失败: {e}")
+                self._bind_data = {}
+        else:
+            self._bind_data = {}
+
+    def _save_bind_data(self):
+        """保存QQ-SteamID绑定数据"""
+        path = os.path.join(self.data_dir, "bind_data.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._bind_data, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"保存 bind_data.json 失败: {e}")
+
+    def _resolve_bind_name(self, sid, steam_name=None):
+        """根据绑定表返回显示名：自定义备注 > QQ昵称 > Steam原始名"""
+        bind_data = getattr(self, '_bind_data', {})
+        for qq, info in bind_data.items():
+            if info.get("sid") == str(sid):
+                nick = info.get("nickname", "")
+                if nick and nick != "*":
+                    return nick
+                break
+        return steam_name or str(sid)
+
     def _load_rank_push_groups(self):
         """加载开启了每日排行榜推送的群列表及 rank_push_all 标志"""
         path = os.path.join(self.data_dir, "rank_push_groups.json")
@@ -443,6 +478,9 @@ class SteamStatusMonitorV3(Star):
         self._last_rank_push_date = None    # 记录上次推送日期，防止同一天重复推送
         self._load_play_records()
         self._load_rank_push_groups()
+        # QQ-SteamID 绑定数据
+        self._bind_data = {}  # {qq: {sid, nickname}}
+        self._load_bind_data()
 
     async def init_poll_time_once(self):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
@@ -1089,13 +1127,21 @@ class SteamStatusMonitorV3(Star):
         yield event.plain_result("本群Steam状态监控启动完成喔！ヾ(≧ω≦)ゞ")
 
     @filter.command("steam addid")
-    async def steam_addid(self, event: AstrMessageEvent, steamid: str):
+    async def steam_addid(self, event: AstrMessageEvent, steamid: str, at_user: str = "", nickname: str = ""):
         if not self._check_perm(event, 3):
             async for r in self._deny(event):
                 yield r
             return
-        '''添加SteamID到本群监控列表（分群），支持逗号分隔多个ID，支持SteamID/个人资料链接/自定义ID/好友码'''
+        '''添加SteamID到本群监控列表（分群），支持逗号分隔多个ID，支持SteamID/个人资料链接/自定义ID/好友码
+        末尾可加 @用户 [备注名] 绑定QQ与SteamID'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        # 解析 @用户 [备注名] 后缀（多参数接收，兼容 AstrBot 参数分割）
+        bind_qq = None
+        bind_nickname = None
+        if at_user:
+                        m = re.search(r'\[CQ:at,qq=(\d+)\]|\[At:(\d+)\]|@.+?\((\d+)\)|@(\d+)', at_user.strip()); bind_qq = m.group(1) or m.group(2) or m.group(3) or m.group(4) if m else None
+        if nickname:
+            bind_nickname = nickname.strip()
         # 仅以中英文逗号分隔多个 ID
         import re as _re
         raw_list = [x.strip() for x in _re.split(r'[,，]+', steamid) if x.strip()]
@@ -1135,6 +1181,14 @@ class SteamStatusMonitorV3(Star):
                 break
         self.group_steam_ids[group_id] = steam_ids
         self._save_group_steam_ids()  # 保存到 steam_groups.json
+        # 绑定数据：写入并保存
+        if bind_qq and added:
+            if not hasattr(self, '_bind_data'):
+                self._bind_data = {}
+            for sid in added:
+                self._bind_data[bind_qq] = {"sid": sid, "nickname": bind_nickname or "*"}
+            self._save_bind_data()
+            logger.info(f"[绑定] QQ{ bind_qq} -> SteamID {added[0]}，备注={bind_nickname or '无'}")
         msg = ""
         if added:
             msg += f"已为本群添加SteamID: {', '.join(added)}\n"
@@ -1147,19 +1201,36 @@ class SteamStatusMonitorV3(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam delid")
     async def steam_delid(self, event: AstrMessageEvent, steamid: str, group_id_param: str = ""):
-        '''从监控组删除SteamID；可选传群号跨群删除：/steam delid [SteamID] [群号]'''
+        '''从监控组删除SteamID；支持好友码/链接；可选传群号跨群删除：/steam delid [SteamID/好友码/链接] [群号]'''
         group_id = group_id_param.strip() if group_id_param.strip() else (str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default')
+        # 支持好友码/链接解析为64位ID
+        sid = await self.resolve_steam_input(steamid)
+        if not sid or not sid.isdigit() or len(sid) != 17:
+            yield event.plain_result("无法解析为有效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 8位好友码")
+            return
         steam_ids = self.group_steam_ids.get(group_id, [])
         if not steam_ids:
             yield event.plain_result(f"群 {group_id} 没有监控任何SteamID")
             return
-        if steamid not in steam_ids:
+        if sid not in steam_ids:
             yield event.plain_result(f"该SteamID不存在于群 {group_id} 的监控组")
             return
-        steam_ids.remove(steamid)
+        steam_ids.remove(sid)
         self.group_steam_ids[group_id] = steam_ids
         self._save_group_steam_ids()
-        yield event.plain_result(f"已为群 {group_id} 删除SteamID: {steamid}")
+        # 同步清理绑定数据
+        removed_bind = []
+        bind_data = getattr(self, '_bind_data', None)
+        if bind_data:
+            for qq, info in list(bind_data.items()):
+                if info.get("sid") == sid:
+                    removed_bind.append(qq)
+                    del bind_data[qq]
+            if removed_bind:
+                self._bind_data = bind_data
+                self._save_bind_data()
+                logger.info(f"[绑定] 删除SteamID {sid} 时同步清理绑定: QQ {', '.join(removed_bind)}")
+        yield event.plain_result(f"已为群 {group_id} 删除SteamID: {sid}")
 
     @filter.command("steam list")
     async def steam_list(self, event: AstrMessageEvent):
@@ -1288,7 +1359,7 @@ class SteamStatusMonitorV3(Star):
                     sid_info[sid] = {"name": info.get("name") or sid, "avatar_url": info.get("avatarfull") or info.get("avatar")}
             for p in rank_data:
                 info = sid_info.get(p["sid"], {})
-                p["name"] = info.get("name", p["sid"][-8:])
+                p["name"] = self._resolve_bind_name(p["sid"], info.get("name", p["sid"][-8:]))
                 p["avatar_url"] = info.get("avatar_url")
                 p["top_game_id"] = None
             # 反查封面gameid
@@ -1356,7 +1427,7 @@ class SteamStatusMonitorV3(Star):
                     }
             for p in rank_data:
                 info = sid_info.get(p["sid"], {})
-                p["name"] = info.get("name", p["sid"][-8:])
+                p["name"] = self._resolve_bind_name(p["sid"], info.get("name", p["sid"][-8:]))
                 p["avatar_url"] = info.get("avatar_url")
                 # 标记主玩游戏ID用于封面获取
                 if p["games"]:
@@ -1548,8 +1619,92 @@ class SteamStatusMonitorV3(Star):
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
             return
-        async for result in handle_openbox(self, event, steamid):
+        sid = await self.resolve_steam_input(steamid)
+        if not sid or not sid.isdigit() or len(sid) != 17:
+            yield event.plain_result("无法解析为有效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 自定义ID链接 / 8位好友码")
+            return
+        async for result in handle_openbox(self, event, sid):
             yield result
+
+    @filter.command("steamwho")
+    async def steam_who(self, event: AstrMessageEvent, qq: str):
+        '''查询指定QQ绑定的Steam玩家状态（ .steamwho @用户 或 .在干嘛 @用户 ）'''
+        if not self._check_perm(event, 2):
+            async for r in self._deny(event):
+                yield r
+            return
+        m = re.search(r'\[CQ:at,qq=(\d+)\]|\[At:(\d+)\]|@.+?\((\d+)\)|@(\d+)', qq.strip()); qq_clean = m.group(1) or m.group(2) or m.group(3) or m.group(4) if m else qq.strip().lstrip('@')
+        info = getattr(self, "_bind_data", {}).get(qq_clean)
+        if not info:
+            yield event.plain_result(f"QQ {qq_clean} 未绑定任何SteamID，请先使用 /steam addid SteamID @{qq_clean}")
+            return
+        sid = info.get("sid", "")
+        if not sid:
+            yield event.plain_result(f"QQ {qq_clean} 的绑定数据异常")
+            return
+        status = await self.fetch_player_status(sid)
+        if not status:
+            yield event.plain_result(f"无法获取 {sid} 的Steam状态")
+            return
+        name = self._resolve_bind_name(sid, status.get('name') or sid)
+        gameid = status.get('gameid')
+        game = status.get('gameextrainfo')
+        personastate = status.get('personastate', 0)
+        avatar_url = status.get('avatarfull') or status.get('avatar') or ''
+        lastlogoff = status.get('lastlogoff')
+        zh_game_name = await self.get_chinese_game_name(gameid, game) if gameid else (game or '')
+        # 构建单人 user_list
+        now = int(time.time())
+        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        start_play_times = self.group_start_play_times.get(group_id, {}).get(sid, {})
+        if gameid:
+            start_time = start_play_times.get(gameid) if isinstance(start_play_times, dict) else None
+            if not start_time and isinstance(start_play_times, dict) and start_play_times:
+                start_time = max(start_play_times.values())
+            if not start_time and not isinstance(start_play_times, dict):
+                start_time = start_play_times
+            play_seconds = now - start_time if start_time else 0
+            play_minutes = play_seconds / 60
+            play_str = f"{play_minutes/60:.1f}小时" if play_minutes >= 60 else f"{play_minutes:.1f}分钟"
+            user_list = [{'sid': sid, 'name': name, 'status': 'playing', 'avatar_url': avatar_url, 'game': zh_game_name, 'gameid': gameid, 'play_str': play_str, 'lastlogoff': lastlogoff}]
+        elif personastate and int(personastate) > 0:
+            user_list = [{'sid': sid, 'name': name, 'status': 'online', 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': '', 'lastlogoff': lastlogoff}]
+        else:
+            hours_ago = (now - int(lastlogoff)) / 3600 if lastlogoff else 0
+            play_str = f"上次在线 {hours_ago:.1f}小时前" if lastlogoff else ''
+            user_list = [{'sid': sid, 'name': name, 'status': 'offline', 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': play_str, 'lastlogoff': lastlogoff}]
+        # 获取头像框
+        from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
+        avatar_frame_paths = {}
+        fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
+        if not fp:
+            frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
+            if frame_url: fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
+        if fp: avatar_frame_paths[sid] = fp
+        # 获取封面
+        covers = {}
+        if gameid:
+            from .game_start_render import get_cover_path
+            cp = await get_cover_path(self.data_dir, gameid, game or zh_game_name, proxy=self.proxy)
+            if cp: covers[sid] = cp
+        # 渲染列表卡片
+        from .steam_list_render import render_steam_list_image
+        font_path = self.get_font_path('NotoSansHans-Regular.otf')
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
+        if img_bytes:
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                tmp_path = tmp.name
+            yield event.image_result(tmp_path)
+        else:
+            yield event.plain_result("渲染图片失败")
+
+    @filter.command("在干嘛")
+    async def steam_zai_gan_ma(self, event: AstrMessageEvent, qq: str):
+        '''.在干嘛 @用户 —— steamwho 的别名'''
+        async for r in self.steam_who(event, qq):
+            yield r
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam off")
@@ -1623,7 +1778,7 @@ class SteamStatusMonitorV3(Star):
         '''测试开始游戏图片渲染效果（steam test_game_start_render [steamid] [gameid]）'''
         try:
             status = await self.fetch_player_status(steamid)
-            player_name = status.get("name") if status else steamid
+            player_name = self._resolve_bind_name(steamid, status.get("name") if status else steamid)
             avatar_url = status.get("avatarfull") or status.get("avatar") or "" if status else ""
             zh_game_name, en_game_name = await self.get_game_names(gameid)
             logger.info(f"[测试开始游戏渲染] steamid={steamid} gameid={gameid} player_name={player_name} avatar_url={avatar_url} zh_game_name={zh_game_name} en_game_name={en_game_name}")
@@ -1659,7 +1814,7 @@ class SteamStatusMonitorV3(Star):
         '''测试游戏结束图片渲染（steam test_game_end_render [steamid] [gameid] [时长分钟] [结束时间 可选] [提示 可选]）'''
         try:
             status = await self.fetch_player_status(steamid)
-            player_name = status.get("name") if status else steamid
+            player_name = self._resolve_bind_name(steamid, status.get("name") if status else steamid)
             avatar_url = status.get("avatarfull") or status.get("avatar") or "" if status else ""
             zh_game_name, en_game_name = await self.get_game_names(gameid)
             logger.info(f"[get_game_names] zh_game_name={zh_game_name}, en_game_name={en_game_name}")  # 新增英文名输出
@@ -2012,7 +2167,7 @@ class SteamStatusMonitorV3(Star):
             if not status:
                 continue
             prev = last_states.get(sid)
-            name = status.get('name') or sid
+            name = self._resolve_bind_name(sid, status.get('name') or sid)
             gameid = status.get('gameid')
             game = status.get('gameextrainfo')
             lastlogoff = status.get('lastlogoff')
@@ -2375,7 +2530,7 @@ class SteamStatusMonitorV3(Star):
                 p_str = f"下次轮询{sl}秒后" if sl < 60 else f"下次轮询{sl//60}分钟后"
                 status = status_map.get(sid)
                 if not status:
-                    user_list.append({'sid': sid, 'name': sid, 'status': 'error', 'avatar_url': '', 'game': '', 'gameid': '', 'play_str': '获取失败', 'group_id': group_id, 'poll_str': p_str})
+                    user_list.append({'sid': sid, 'name': self._resolve_bind_name(sid, sid), 'status': 'error', 'avatar_url': '', 'game': '', 'gameid': '', 'play_str': '获取失败', 'group_id': group_id, 'poll_str': p_str})
                     continue
                 name = status.get('name') or sid
                 gameid = status.get('gameid')
