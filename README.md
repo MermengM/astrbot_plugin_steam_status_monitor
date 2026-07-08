@@ -127,7 +127,6 @@ pip install httpx pillow
   - **封面降级优化**：竖版封面缺失时叠加横版 header_image，永久缓存
   - **排行榜视觉优化**：进度条改为 Top1 满格基准，显示百分比对比，总时长金色
   - **游戏过滤**：黑白名单模式（全部/白名单/黑名单），按 gameid 过滤
-  - **清理**.gitignore，移除 venv/__pycache__ 等非项目文件
 
 - V3.1.10（2026/07/06）
   - **Bug 修复**：修复 WebUI 保存配置时 smart_poll_intervals 类型校验失败（list vs string），init 阶段强制归一化为逗号分隔字符串
