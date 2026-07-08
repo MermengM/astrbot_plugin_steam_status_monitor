@@ -1182,10 +1182,10 @@ class SteamStatusMonitorV3(Star):
         self.group_steam_ids[group_id] = steam_ids
         self._save_group_steam_ids()  # 保存到 steam_groups.json
         # 绑定数据：写入并保存
-        if bind_qq and added:
+        if bind_qq and steamid_list:
             if not hasattr(self, '_bind_data'):
                 self._bind_data = {}
-            for sid in added:
+            for sid in steamid_list:
                 self._bind_data[bind_qq] = {"sid": sid, "nickname": bind_nickname or "*"}
             self._save_bind_data()
             logger.info(f"[绑定] QQ{ bind_qq} -> SteamID {added[0]}，备注={bind_nickname or '无'}")
@@ -1629,10 +1629,7 @@ class SteamStatusMonitorV3(Star):
     @filter.command("steamwho")
     async def steam_who(self, event: AstrMessageEvent, qq: str):
         '''查询指定QQ绑定的Steam玩家状态（ .steamwho @用户 或 .在干嘛 @用户 ）'''
-        if not self._check_perm(event, 2):
-            async for r in self._deny(event):
-                yield r
-            return
+        
         m = re.search(r'\[CQ:at,qq=(\d+)\]|\[At:(\d+)\]|@.+?\((\d+)\)|@(\d+)', qq.strip()); qq_clean = m.group(1) or m.group(2) or m.group(3) or m.group(4) if m else qq.strip().lstrip('@')
         info = getattr(self, "_bind_data", {}).get(qq_clean)
         if not info:
