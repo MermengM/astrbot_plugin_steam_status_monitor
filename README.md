@@ -116,6 +116,18 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.1.12（2026/07/08）
+  - **QQ-SteamID 绑定系统**：addid 支持 @用户 [备注名]，绑定即监控
+  - **自定义备注名**：所有推送通知、list、rank、alllist、.在干嘛 图片优先显示备注
+  - **新增指令**：.steamwho @用户 / .在干嘛 @用户 即时查询单人 Steam 状态
+  - **delid/openbox 支持多格式**：好友码、链接均可
+
+- V3.1.11（2026/07/07）
+  - **封面降级优化**：竖版封面缺失时叠加横版 header_image，永久缓存
+  - **排行榜视觉优化**：进度条改为 Top1 满格基准，显示百分比对比，总时长金色
+  - **游戏过滤**：黑白名单模式（全部/白名单/黑名单），按 gameid 过滤
+  - **清理**.gitignore，移除 venv/__pycache__ 等非项目文件
+
 - V3.1.10（2026/07/06）
   - **Bug 修复**：修复 WebUI 保存配置时 smart_poll_intervals 类型校验失败（list vs string），init 阶段强制归一化为逗号分隔字符串
   - **代理增强**：SOCKS5 代理自动安装 socksio 依赖（pip install httpx[socks]），安装失败则打印清晰指引
