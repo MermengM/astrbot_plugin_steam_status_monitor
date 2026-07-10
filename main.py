@@ -2240,7 +2240,7 @@ class SteamStatusMonitorV3(Star):
                         self._pending_quit_tasks[sid].pop(current_gameid, None)
                     quit_info["notified"] = True
                     msg = f"⚠️ {name} 游玩 {zh_game_name} 时网络波动了"
-                    if skip_push:
+                    if skip_push or not self.config.get('enable_game_start_notify', True):
                         last_states[sid] = status
                         continue
                     # 推送到主群和所有联动群
@@ -2264,51 +2264,52 @@ class SteamStatusMonitorV3(Star):
                     continue
                 start_play_times.setdefault(sid, {})[current_gameid] = now
                 msg = f"🟢【{name}】开始游玩 {zh_game_name}"
-                # 推送到主群和所有push_group
-                notify_sessions = []
-                notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-                if notify_session:
-                    notify_sessions.append(notify_session)
-                for push_gid in self.push_groups.get(sid, []):
-                    push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
-                    if push_session and push_session not in notify_sessions:
-                        notify_sessions.append(push_session)
-                # 渲染图片只做一次（受 notify_send_image 开关控制，关闭则跳过渲染省资源）
-                send_image = self.config.get('notify_send_image', True) if not skip_push else False
-                send_text = self.config.get('notify_send_text', True) if not skip_push else False
-                img_path = None
-                if send_image:
-                    try:
-                        avatar_url = status.get("avatarfull") or status.get("avatar")
-                        superpower = self.get_today_superpower(sid)
-                        font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                        online_count = await self.get_game_online_count(current_gameid)
-                        zh_game_name, en_game_name = await self.get_game_names(current_gameid, zh_game_name)
-                        img_bytes = await render_game_start(
-                            self.data_dir, sid, name, avatar_url, current_gameid, zh_game_name,
-                            api_key=self.API_KEY, superpower=superpower, sgdb_api_key=self.SGDB_API_KEY,
-                            font_path=font_path, sgdb_game_name=en_game_name, online_count=online_count, appid=gameid
-                        , proxy=self.proxy)
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                            tmp.write(img_bytes)
-                            img_path = tmp.name
-                    except Exception as e:
-                        logger.error(f"推送开始游戏图片失败: {e}")
-                        img_path = None
-                for session in notify_sessions:
-                    try:
-                        # 按 notify_send_text / notify_send_image 开关组装消息链
-                        msg_chain = []
-                        if send_text:
-                            msg_chain.append(Plain(f"🟢【{name}】开始游玩 {zh_game_name}"))
-                        if img_path:
-                            msg_chain.append(Image.fromFileSystem(img_path))
-                        if not msg_chain:
-                            continue  # 两个开关都关则跳过
-                        await self.context.send_message(session, MessageChain(msg_chain))
-                    except Exception as e:
-                        logger.error(f"推送开始游戏消息失败: {e}")
+                if not skip_push and self.config.get('enable_game_start_notify', True):
+                    # 推送到主群和所有push_group
+                    notify_sessions = []
+                    notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
+                    if notify_session:
+                        notify_sessions.append(notify_session)
+                    for push_gid in self.push_groups.get(sid, []):
+                        push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
+                        if push_session and push_session not in notify_sessions:
+                            notify_sessions.append(push_session)
+                    # 渲染图片只做一次（受 notify_send_image 开关控制，关闭则跳过渲染省资源）
+                    send_image = self.config.get('notify_send_image', True)
+                    send_text = self.config.get('notify_send_text', True)
+                    img_path = None
+                    if send_image:
+                        try:
+                            avatar_url = status.get("avatarfull") or status.get("avatar")
+                            superpower = self.get_today_superpower(sid)
+                            font_path = self.get_font_path('NotoSansHans-Regular.otf')
+                            online_count = await self.get_game_online_count(current_gameid)
+                            zh_game_name, en_game_name = await self.get_game_names(current_gameid, zh_game_name)
+                            img_bytes = await render_game_start(
+                                self.data_dir, sid, name, avatar_url, current_gameid, zh_game_name,
+                                api_key=self.API_KEY, superpower=superpower, sgdb_api_key=self.SGDB_API_KEY,
+                                font_path=font_path, sgdb_game_name=en_game_name, online_count=online_count, appid=gameid
+                            , proxy=self.proxy)
+                            import tempfile
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                                tmp.write(img_bytes)
+                                img_path = tmp.name
+                        except Exception as e:
+                            logger.error(f"推送开始游戏图片失败: {e}")
+                            img_path = None
+                    for session in notify_sessions:
+                        try:
+                            # 按 notify_send_text / notify_send_image 开关组装消息链
+                            msg_chain = []
+                            if send_text:
+                                msg_chain.append(Plain(msg))
+                            if img_path:
+                                msg_chain.append(Image.fromFileSystem(img_path))
+                            if not msg_chain:
+                                continue  # 两个开关都关则跳过
+                            await self.context.send_message(session, MessageChain(msg_chain))
+                        except Exception as e:
+                            logger.error(f"推送开始游戏消息失败: {e}")
                 # 成就监控任务启动（受 enable_achievement_poll 配置控制）
                 if skip_push or not self.config.get('enable_achievement_poll', True):
                     last_states[sid] = status

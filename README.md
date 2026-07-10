@@ -54,6 +54,7 @@
 | `max_group_size` | 单群最大监控人数 | 20 |
 | `detailed_poll_log` | 详细轮询日志开关 | true |
 | `enable_achievement_poll` | 成就轮询推送开关 | true |
+| `enable_game_start_notify` | 游戏开始通知开关 | true |
 | `enable_game_end_notify` | 游戏结束通知开关 | true |
 | `notify_send_image` | 通知发送图片开关 | true |
 | `notify_send_text` | 通知发送文本开关 | true |
@@ -186,7 +187,7 @@ pip install httpx pillow
   - **WebUI 卡顿修复**：引入持久化数据脏标志 + 节流写盘（默认 300 秒一次），避免高频写盘拖慢 AstrBot 主进程与 WebUI
   - **退出推送修复**：新增延迟退出检查与去重机制（`_pending_quit_tasks`），修复同一玩家同一游戏在短时间内重复触发退出通知的问题；优化推送会话管理，修复 `未设置推送会话，无法发送消息` 错误
   - **多种 ID 输入格式**：`addid` 现支持 SteamID64、个人资料链接、自定义 vanity URL（自动调用 ResolveVanityURL 解析）、`s.team` 短链、8 位好友码
-  - **通知开关精细化**：新增 `enable_game_end_notify`（可单独关闭游戏结束通知）、`notify_send_image` / `notify_send_text`（图片/文本推送可独立控制）
+  - **通知开关精细化**：新增 `enable_game_start_notify` / `enable_game_end_notify`（可单独关闭游戏开始/结束通知）、`notify_send_image` / `notify_send_text`（图片/文本推送可独立控制）
   - **配置项开放**：`max_group_size`（单群最大监控人数）由硬编码改为可配置项，方便大群 / 粉丝群使用
   - **网络代理支持**：新增 `enable_proxy` / `proxy_url` 配置项，支持 http / https / socks5 代理（来自社区 PR）
   - **字体自动管理**：启动时自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，缓存到数据目录，渲染更稳定
